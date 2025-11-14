@@ -21,6 +21,8 @@ export class TurnManager {
   navigationCards: unknown[];
   selectedLieutenant?: string;
   selectedNavigator?: string;
+  mutinyEligibleVoters: Set<string>;
+  mutinyTimeoutId?: NodeJS.Timeout;
 
   constructor(gameState: GameState, client: WebClient, channelId: string) {
     this.game = gameState;
@@ -28,6 +30,7 @@ export class TurnManager {
     this.channelId = channelId;
     this.mutinyVotes = new Map();
     this.navigationCards = [];
+    this.mutinyEligibleVoters = new Set();
   }
 
   async startTurn(): Promise<void> {
@@ -133,9 +136,18 @@ export class TurnManager {
 
   async mutinyPhase(): Promise<void> {
     this.mutinyVotes.clear();
+    this.mutinyEligibleVoters.clear();
+
+    // Clear any existing timeout
+    if (this.mutinyTimeoutId) {
+      clearTimeout(this.mutinyTimeoutId);
+    }
 
     const alivePlayers = this.game.getAlivePlayers()
       .filter(p => p.userId !== this.game.captain);
+
+    // Track who is eligible to vote
+    alivePlayers.forEach(p => this.mutinyEligibleVoters.add(p.userId));
 
     await this.client.chat.postMessage({
       channel: this.channelId,
@@ -145,7 +157,7 @@ export class TurnManager {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*Mutiny Phase* ⚔️\n\nAll crew members (except <@${this.game.captain}>) may vote for mutiny!\n\nPlace your guns in secret. Click the button below to vote.`
+            text: `*Mutiny Phase* ⚔️\n\nAll crew members (except <@${this.game.captain}>) may vote for mutiny!\n\nPlace your guns in secret. Click the button below to vote.\n\n_Votes: 0/${this.mutinyEligibleVoters.size}_`
           }
         },
         {
@@ -165,6 +177,79 @@ export class TurnManager {
         }
       ]
     });
+
+    // Set a timeout as fallback (60 seconds)
+    this.mutinyTimeoutId = setTimeout(async () => {
+      await this.resolveMutiny();
+    }, 60000);
+  }
+
+  async resolveMutiny(): Promise<void> {
+    // Clear the timeout if it exists
+    if (this.mutinyTimeoutId) {
+      clearTimeout(this.mutinyTimeoutId);
+      this.mutinyTimeoutId = undefined;
+    }
+
+    // Tally the votes
+    let totalGunsUsed = 0;
+    const voteDetails: string[] = [];
+
+    for (const [userId, guns] of this.mutinyVotes.entries()) {
+      totalGunsUsed += guns;
+      if (guns > 0) {
+        voteDetails.push(`<@${userId}> used ${guns} gun${guns > 1 ? 's' : ''}`);
+      }
+    }
+
+    // Players who didn't vote count as 0 guns
+    const nonVoters = Array.from(this.mutinyEligibleVoters).filter(
+      id => !this.mutinyVotes.has(id)
+    );
+
+    // Calculate mutiny threshold (typically half the crew's total guns)
+    const totalCrewGuns = Array.from(this.mutinyEligibleVoters)
+      .map(id => this.game.getPlayer(id)?.guns || 0)
+      .reduce((sum, guns) => sum + guns, 0);
+
+    const mutinyThreshold = Math.floor(totalCrewGuns / 2) + 1;
+    const mutinySucceeded = totalGunsUsed >= mutinyThreshold;
+
+    const previousCaptain = this.game.captain;
+
+    // Build result message
+    let resultMessage = `*Mutiny Results* ⚔️\n\n`;
+    resultMessage += `Total guns used: ${totalGunsUsed}/${totalCrewGuns}\n`;
+    resultMessage += `Threshold for success: ${mutinyThreshold}\n\n`;
+
+    if (voteDetails.length > 0) {
+      resultMessage += `Votes cast:\n${voteDetails.join('\n')}\n\n`;
+    }
+
+    if (nonVoters.length > 0) {
+      resultMessage += `_${nonVoters.length} crew member(s) did not vote in time_\n\n`;
+    }
+
+    if (mutinySucceeded) {
+      resultMessage += `🏴‍☠️ *MUTINY SUCCEEDS!*\n\n`;
+      resultMessage += `<@${previousCaptain}> has been overthrown!\n`;
+
+      // Replace the captain with a random crew member
+      this.game.rotateCaptain();
+
+      resultMessage += `The new Captain is <@${this.game.captain}>!`;
+    } else {
+      resultMessage += `✅ *Mutiny fails.*\n\n<@${previousCaptain}> remains Captain.`;
+    }
+
+    await this.client.chat.postMessage({
+      channel: this.channelId,
+      text: resultMessage
+    });
+
+    // Move to next phase
+    this.game.currentPhase = 'NAVIGATION';
+    await this.executePhase();
   }
 
   async navigationPhase(): Promise<void> {
@@ -203,7 +288,7 @@ export class TurnManager {
         text: dir.name
       },
       action_id: `navigate_${dir.dx}_${dir.dy}`,
-      value: JSON.stringify({ dx: dir.dx, dy: dir.dy })
+      value: JSON.stringify({ dx: dir.dx, dy: dir.dy, channelId: this.channelId })
     }));
 
     try {
@@ -320,7 +405,8 @@ export class TurnManager {
 
       default:
         if (action.action_id.startsWith('navigate_')) {
-          const movement: NavigationMovement = JSON.parse(action.value);
+          const payload = JSON.parse(action.value);
+          const movement: NavigationMovement = { dx: payload.dx, dy: payload.dy };
           this.game.moveShip(movement.dx, movement.dy);
 
           await client.chat.postMessage({
@@ -409,6 +495,18 @@ export class TurnManager {
         user: userId,
         text: `Your mutiny vote has been recorded: ${gunsCount} guns`
       });
+
+      // Check if all eligible voters have voted
+      if (this.mutinyVotes.size === this.mutinyEligibleVoters.size) {
+        // All votes are in, resolve immediately
+        await this.resolveMutiny();
+      } else {
+        // Update the mutiny phase message with vote count
+        await client.chat.postMessage({
+          channel: this.channelId,
+          text: `_Vote recorded. Votes: ${this.mutinyVotes.size}/${this.mutinyEligibleVoters.size}_`
+        });
+      }
     }
   }
 }

@@ -177,8 +177,20 @@ export class GameManager {
   }
 
   async handleAction(action: any, body: any, client: WebClient): Promise<void> {
-    const channelId = body.channel?.id || body.view?.private_metadata;
+    let channelId = body.channel?.id || body.view?.private_metadata;
     const userId = body.user.id;
+
+    // For actions sent from DMs (like navigation cards), extract channelId from action value
+    if (action.value && action.action_id?.startsWith('navigate_')) {
+      try {
+        const payload = JSON.parse(action.value);
+        if (payload.channelId) {
+          channelId = payload.channelId;
+        }
+      } catch (e) {
+        console.error('Failed to parse action value:', e);
+      }
+    }
 
     const turnManager = this.turnManagers.get(channelId);
     if (!turnManager) {
