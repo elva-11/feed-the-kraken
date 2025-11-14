@@ -181,7 +181,7 @@ export class GameManager {
     const userId = body.user.id;
 
     // For actions sent from DMs (like navigation cards), extract channelId from action value
-    if (action.value && action.action_id?.startsWith('navigate_')) {
+    if (action.value && (action.action_id?.startsWith('navigate_') || action.action_id?.startsWith('nav_choice_'))) {
       try {
         const payload = JSON.parse(action.value);
         if (payload.channelId) {

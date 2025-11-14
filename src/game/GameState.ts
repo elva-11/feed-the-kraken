@@ -232,6 +232,62 @@ export class GameState {
     this.shipPosition.y += dy;
   }
 
+  getShipVisualization(): string {
+    const { x, y } = this.shipPosition;
+
+    // Create a grid showing the ship's position and the three destinations
+    // Grid range: Y from 12 to -7, X from -2 to 12
+    let grid = '```\n';
+
+    // Header
+    grid += '   ';
+    for (let i = -2; i <= 12; i++) {
+      grid += i >= 0 ? ` ${i.toString().padStart(2, ' ')}` : ` ${i}`;
+    }
+    grid += '\n';
+
+    for (let row = 12; row >= -7; row--) {
+      grid += `${row.toString().padStart(2, ' ')} `;
+
+      for (let col = -2; col <= 12; col++) {
+        let cell = ' . ';
+
+        // Ship position
+        if (col === x && row === y) {
+          cell = ' 🚢';
+        }
+        // Kraken (North) - y >= 10
+        else if (row === 10 && col >= 0 && col <= 10) {
+          cell = ' 🐙';
+        }
+        // Bluewater Bay (Sailors) - x >= 10, y >= 5
+        else if (col === 10 && row >= 5 && row < 10) {
+          cell = ' 🔵';
+        }
+        else if (col >= 10 && row === 5) {
+          cell = ' 🔵';
+        }
+        // Crimson Cove (Pirates) - x >= 10, y <= -5
+        else if (col === 10 && row <= -5) {
+          cell = ' 🔴';
+        }
+        else if (col >= 10 && row === -5) {
+          cell = ' 🔴';
+        }
+
+        grid += cell;
+      }
+      grid += '\n';
+    }
+    grid += '```\n\n';
+    grid += `🚢 Ship: (${x}, ${y})\n`;
+    grid += `🐙 Kraken (Cult): y ≥ 10\n`;
+    grid += `🔵 Bluewater Bay (Sailors): x ≥ 10, y ≥ 5\n`;
+    grid += `🔴 Crimson Cove (Pirates): x ≥ 10, y ≤ -5`;
+
+    return grid;
+  }
+
   nextPhase(): void {
     const phaseOrder: GamePhase[] = [
       'NAVIGATION_SELECTION',
@@ -264,13 +320,13 @@ export class GameState {
     const winCondition = this.checkWinCondition();
 
     if (winCondition.winner) {
-      return `*Game Over!*\n\n${winCondition.reason}\n*${winCondition.winner}* wins!`;
+      return `*Game Over!*\n\n${winCondition.reason}\n*${winCondition.winner}* wins!\n\n${this.getShipVisualization()}`;
     }
 
     return `*Feed the Kraken - Turn ${this.currentTurn}*\n\n` +
       `*Phase:* ${this.currentPhase}\n` +
-      `*Captain:* <@${this.captain}>\n` +
-      `*Ship Position:* (${this.shipPosition.x}, ${this.shipPosition.y})\n\n` +
+      `*Captain:* <@${this.captain}>\n\n` +
+      `${this.getShipVisualization()}\n\n` +
       `Players:\n${playerList}`;
   }
 }

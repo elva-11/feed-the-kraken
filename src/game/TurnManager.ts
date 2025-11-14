@@ -23,6 +23,8 @@ export class TurnManager {
   selectedNavigator?: string;
   mutinyEligibleVoters: Set<string>;
   mutinyTimeoutId?: NodeJS.Timeout;
+  captainNavigationChoice?: NavigationMovement;
+  lieutenantNavigationChoice?: NavigationMovement;
 
   constructor(gameState: GameState, client: WebClient, channelId: string) {
     this.game = gameState;
@@ -253,25 +255,29 @@ export class TurnManager {
   }
 
   async navigationPhase(): Promise<void> {
+    // Reset navigation choices
+    this.captainNavigationChoice = undefined;
+    this.lieutenantNavigationChoice = undefined;
+
     await this.client.chat.postMessage({
       channel: this.channelId,
-      text: `*Navigation Phase*\n\nThe navigation team (<@${this.game.lieutenant}> and <@${this.game.navigator}>) is steering the ship!`,
+      text: `*Navigation Phase*\n\nThe Captain and Lieutenant will each choose a direction, then the Navigator picks one!`,
       blocks: [
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*Navigation Phase* 🧭\n\nLieutenant: <@${this.game.lieutenant}>\nNavigator: <@${this.game.navigator}>\n\nThey are now playing navigation cards to steer the ship...`
+            text: `*Navigation Phase* 🧭\n\nCaptain: <@${this.game.captain}>\nLieutenant: <@${this.game.lieutenant}>\nNavigator: <@${this.game.navigator}>\n\n${this.game.getShipVisualization()}\n\nThe Captain and Lieutenant are choosing navigation options...`
           }
         }
       ]
     });
 
-    await this.sendNavigationCards(this.game.lieutenant!);
-    await this.sendNavigationCards(this.game.navigator!);
+    await this.sendNavigationChoiceCards(this.game.captain!, 'captain');
+    await this.sendNavigationChoiceCards(this.game.lieutenant!, 'lieutenant');
   }
 
-  async sendNavigationCards(userId: string): Promise<void> {
+  async sendNavigationChoiceCards(userId: string, role: 'captain' | 'lieutenant'): Promise<void> {
     const directions: NavigationDirection[] = [
       { name: 'North ⬆️', dx: 0, dy: 1 },
       { name: 'South ⬇️', dx: 0, dy: -1 },
@@ -287,20 +293,20 @@ export class TurnManager {
         type: 'plain_text' as const,
         text: dir.name
       },
-      action_id: `navigate_${dir.dx}_${dir.dy}`,
-      value: JSON.stringify({ dx: dir.dx, dy: dir.dy, channelId: this.channelId })
+      action_id: `nav_choice_${role}_${dir.dx}_${dir.dy}`,
+      value: JSON.stringify({ dx: dir.dx, dy: dir.dy, channelId: this.channelId, role })
     }));
 
     try {
       await this.client.chat.postMessage({
         channel: userId,
-        text: 'Choose a navigation direction:',
+        text: 'Choose a navigation direction option:',
         blocks: [
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Choose your navigation card:*\n\nSelect a direction to move the ship:'
+              text: `*Choose a navigation option for the Navigator:*\n\n${this.game.getShipVisualization()}\n\nSelect a direction:`
             }
           },
           {
@@ -310,39 +316,109 @@ export class TurnManager {
         ]
       });
     } catch (error) {
-      console.error(`Failed to send navigation cards to ${userId}:`, error);
+      console.error(`Failed to send navigation choice cards to ${userId}:`, error);
     }
+  }
+
+  async sendNavigatorFinalChoice(): Promise<void> {
+    if (!this.captainNavigationChoice || !this.lieutenantNavigationChoice) {
+      console.error('Missing navigation choices');
+      return;
+    }
+
+    const choices = [
+      {
+        movement: this.captainNavigationChoice,
+        name: this.getDirectionName(this.captainNavigationChoice),
+        from: 'Captain'
+      },
+      {
+        movement: this.lieutenantNavigationChoice,
+        name: this.getDirectionName(this.lieutenantNavigationChoice),
+        from: 'Lieutenant'
+      }
+    ];
+
+    const buttons = choices.map(choice => ({
+      type: 'button' as const,
+      text: {
+        type: 'plain_text' as const,
+        text: `${choice.name} (from ${choice.from})`
+      },
+      action_id: `navigate_final_${choice.movement.dx}_${choice.movement.dy}`,
+      value: JSON.stringify({ dx: choice.movement.dx, dy: choice.movement.dy, channelId: this.channelId })
+    }));
+
+    try {
+      await this.client.chat.postMessage({
+        channel: this.game.navigator!,
+        text: 'Choose which direction to navigate:',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Choose one of the two navigation options:*\n\n${this.game.getShipVisualization()}`
+            }
+          },
+          {
+            type: 'actions',
+            elements: buttons
+          }
+        ]
+      });
+
+      await this.client.chat.postMessage({
+        channel: this.channelId,
+        text: `The Captain and Lieutenant have chosen their directions. Waiting for <@${this.game.navigator}> to make the final choice...`
+      });
+    } catch (error) {
+      console.error(`Failed to send final navigation choice to navigator:`, error);
+    }
+  }
+
+  getDirectionName(movement: NavigationMovement): string {
+    const { dx, dy } = movement;
+    if (dx === 0 && dy === 1) return 'North ⬆️';
+    if (dx === 0 && dy === -1) return 'South ⬇️';
+    if (dx === 1 && dy === 0) return 'East ➡️';
+    if (dx === -1 && dy === 0) return 'West ⬅️';
+    if (dx === 1 && dy === 1) return 'Northeast ↗️';
+    if (dx === 1 && dy === -1) return 'Southeast ↘️';
+    return `(${dx}, ${dy})`;
   }
 
   async votingPhase(): Promise<void> {
     await this.client.chat.postMessage({
       channel: this.channelId,
-      text: `*Voting Phase*\n\nTime to discuss and vote!`,
+      text: `*Discussion Phase*\n\nDiscuss what happened!`,
       blocks: [
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*Voting Phase* 🗳️\n\nDiscuss what happened and decide on any actions!\n\nCurrent ship position: (${this.game.shipPosition.x}, ${this.game.shipPosition.y})`
+            text: `*Discussion Phase* 🗳️\n\nDiscuss what happened and decide on any actions!\n\n${this.game.getShipVisualization()}`
           }
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: {
-                type: 'plain_text',
-                text: 'End Turn'
-              },
-              style: 'primary',
-              action_id: 'end_turn',
-              value: this.channelId
-            }
-          ]
         }
       ]
     });
+
+    // Automatically end turn after 30 seconds
+    setTimeout(async () => {
+      await this.endTurn();
+    }, 30000);
+  }
+
+  async endTurn(): Promise<void> {
+    const winCondition = this.game.checkWinCondition();
+    if (winCondition.winner) {
+      await this.client.chat.postMessage({
+        channel: this.channelId,
+        text: `*Game Over!*\n\n${winCondition.reason}\n\n*${winCondition.winner}* wins! 🎉\n\n${this.game.getShipVisualization()}`
+      });
+    } else {
+      await this.startTurn();
+    }
   }
 
   async handleAction(action: any, body: any, client: WebClient): Promise<void> {
@@ -392,26 +468,75 @@ export class TurnManager {
         break;
 
       case 'end_turn':
-        const winCondition = this.game.checkWinCondition();
-        if (winCondition.winner) {
-          await client.chat.postMessage({
-            channel: this.channelId,
-            text: `*Game Over!*\n\n${winCondition.reason}\n\n*${winCondition.winner}* wins! 🎉`
-          });
-        } else {
-          await this.startTurn();
-        }
+        await this.endTurn();
         break;
 
       default:
-        if (action.action_id.startsWith('navigate_')) {
+        // Handle captain/lieutenant navigation choices
+        if (action.action_id.startsWith('nav_choice_captain_')) {
+          if (userId !== this.game.captain) {
+            await client.chat.postEphemeral({
+              channel: this.channelId,
+              user: userId,
+              text: 'Only the Captain can choose this!'
+            });
+            return;
+          }
+
+          const payload = JSON.parse(action.value);
+          this.captainNavigationChoice = { dx: payload.dx, dy: payload.dy };
+
+          await client.chat.postEphemeral({
+            channel: userId,
+            user: userId,
+            text: `Your choice has been recorded: ${this.getDirectionName(this.captainNavigationChoice)}`
+          });
+
+          // Check if both choices are in
+          if (this.lieutenantNavigationChoice) {
+            await this.sendNavigatorFinalChoice();
+          }
+        } else if (action.action_id.startsWith('nav_choice_lieutenant_')) {
+          if (userId !== this.game.lieutenant) {
+            await client.chat.postEphemeral({
+              channel: this.channelId,
+              user: userId,
+              text: 'Only the Lieutenant can choose this!'
+            });
+            return;
+          }
+
+          const payload = JSON.parse(action.value);
+          this.lieutenantNavigationChoice = { dx: payload.dx, dy: payload.dy };
+
+          await client.chat.postEphemeral({
+            channel: userId,
+            user: userId,
+            text: `Your choice has been recorded: ${this.getDirectionName(this.lieutenantNavigationChoice)}`
+          });
+
+          // Check if both choices are in
+          if (this.captainNavigationChoice) {
+            await this.sendNavigatorFinalChoice();
+          }
+        } else if (action.action_id.startsWith('navigate_final_')) {
+          // Navigator's final choice
+          if (userId !== this.game.navigator) {
+            await client.chat.postEphemeral({
+              channel: this.channelId,
+              user: userId,
+              text: 'Only the Navigator can choose this!'
+            });
+            return;
+          }
+
           const payload = JSON.parse(action.value);
           const movement: NavigationMovement = { dx: payload.dx, dy: payload.dy };
           this.game.moveShip(movement.dx, movement.dy);
 
           await client.chat.postMessage({
             channel: this.channelId,
-            text: `<@${userId}> played a navigation card! New position: (${this.game.shipPosition.x}, ${this.game.shipPosition.y})`
+            text: `<@${userId}> (Navigator) chose ${this.getDirectionName(movement)}!\n\n${this.game.getShipVisualization()}`
           });
 
           this.game.currentPhase = 'VOTING';
