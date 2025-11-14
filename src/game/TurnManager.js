@@ -1,0 +1,403 @@
+export class TurnManager {
+  constructor(gameState, client, channelId) {
+    this.game = gameState;
+    this.client = client;
+    this.channelId = channelId;
+    this.mutinyVotes = new Map(); // userId -> number of guns
+    this.navigationCards = [];
+  }
+
+  async startTurn() {
+    this.game.nextPhase();
+    await this.executePhase();
+  }
+
+  async executePhase() {
+    switch (this.game.currentPhase) {
+      case 'NAVIGATION_SELECTION':
+        await this.navigationSelectionPhase();
+        break;
+      case 'MUTINY':
+        await this.mutinyPhase();
+        break;
+      case 'NAVIGATION':
+        await this.navigationPhase();
+        break;
+      case 'VOTING':
+        await this.votingPhase();
+        break;
+    }
+  }
+
+  async navigationSelectionPhase() {
+    const captain = this.game.getPlayer(this.game.captain);
+
+    // Create interactive message for captain to select navigation team
+    const alivePlayers = this.game.getAlivePlayers()
+      .filter(p => p.userId !== this.game.captain);
+
+    const playerOptions = alivePlayers.map(p => ({
+      text: {
+        type: 'plain_text',
+        text: p.username || `Player ${p.userId}`
+      },
+      value: p.userId
+    }));
+
+    await this.client.chat.postMessage({
+      channel: this.channelId,
+      text: `*Turn ${this.game.currentTurn} - Navigation Selection*\n\n<@${this.game.captain}> is the Captain!`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Turn ${this.game.currentTurn} - Navigation Selection*\n\n<@${this.game.captain}> is the Captain and must select a Lieutenant and Navigator!`
+          }
+        },
+        {
+          type: 'divider'
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Select Lieutenant:*'
+          },
+          accessory: {
+            type: 'static_select',
+            placeholder: {
+              type: 'plain_text',
+              text: 'Choose Lieutenant'
+            },
+            action_id: 'select_lieutenant',
+            options: playerOptions
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Select Navigator:*'
+          },
+          accessory: {
+            type: 'static_select',
+            placeholder: {
+              type: 'plain_text',
+              text: 'Choose Navigator'
+            },
+            action_id: 'select_navigator',
+            options: playerOptions
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'Confirm Navigation Team'
+              },
+              style: 'primary',
+              action_id: 'confirm_navigation_team',
+              value: this.channelId
+            }
+          ]
+        }
+      ]
+    });
+  }
+
+  async mutinyPhase() {
+    this.mutinyVotes.clear();
+
+    const alivePlayers = this.game.getAlivePlayers()
+      .filter(p => p.userId !== this.game.captain);
+
+    await this.client.chat.postMessage({
+      channel: this.channelId,
+      text: `*Mutiny Phase*\n\nAll crew members (except the Captain) may vote for a mutiny!`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Mutiny Phase* ⚔️\n\nAll crew members (except <@${this.game.captain}>) may vote for mutiny!\n\nPlace your guns in secret. Click the button below to vote.`
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'Cast Mutiny Vote'
+              },
+              style: 'danger',
+              action_id: 'cast_mutiny_vote',
+              value: this.channelId
+            }
+          ]
+        }
+      ]
+    });
+
+    // In a real implementation, you'd set a timer here and wait for votes
+    // For now, we'll rely on manual progression or set a timeout
+  }
+
+  async navigationPhase() {
+    await this.client.chat.postMessage({
+      channel: this.channelId,
+      text: `*Navigation Phase*\n\nThe navigation team (<@${this.game.lieutenant}> and <@${this.game.navigator}>) is steering the ship!`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Navigation Phase* 🧭\n\nLieutenant: <@${this.game.lieutenant}>\nNavigator: <@${this.game.navigator}>\n\nThey are now playing navigation cards to steer the ship...`
+          }
+        }
+      ]
+    });
+
+    // Send navigation cards to Lieutenant and Navigator
+    await this.sendNavigationCards(this.game.lieutenant);
+    await this.sendNavigationCards(this.game.navigator);
+  }
+
+  async sendNavigationCards(userId) {
+    // In a real implementation, you'd have a deck of navigation cards
+    // For now, simplified version
+    const directions = [
+      { name: 'North ⬆️', dx: 0, dy: 1 },
+      { name: 'South ⬇️', dx: 0, dy: -1 },
+      { name: 'East ➡️', dx: 1, dy: 0 },
+      { name: 'West ⬅️', dx: -1, dy: 0 },
+      { name: 'Northeast ↗️', dx: 1, dy: 1 },
+      { name: 'Southeast ↘️', dx: 1, dy: -1 }
+    ];
+
+    const buttons = directions.map(dir => ({
+      type: 'button',
+      text: {
+        type: 'plain_text',
+        text: dir.name
+      },
+      action_id: `navigate_${dir.dx}_${dir.dy}`,
+      value: JSON.stringify({ dx: dir.dx, dy: dir.dy })
+    }));
+
+    try {
+      await this.client.chat.postMessage({
+        channel: userId,
+        text: 'Choose a navigation direction:',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Choose your navigation card:*\n\nSelect a direction to move the ship:'
+            }
+          },
+          {
+            type: 'actions',
+            elements: buttons
+          }
+        ]
+      });
+    } catch (error) {
+      console.error(`Failed to send navigation cards to ${userId}:`, error);
+    }
+  }
+
+  async votingPhase() {
+    await this.client.chat.postMessage({
+      channel: this.channelId,
+      text: `*Voting Phase*\n\nTime to discuss and vote!`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Voting Phase* 🗳️\n\nDiscuss what happened and decide on any actions!\n\nCurrent ship position: (${this.game.shipPosition.x}, ${this.game.shipPosition.y})`
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'End Turn'
+              },
+              style: 'primary',
+              action_id: 'end_turn',
+              value: this.channelId
+            }
+          ]
+        }
+      ]
+    });
+  }
+
+  async handleAction(action, body, client) {
+    const userId = body.user.id;
+
+    switch (action.action_id) {
+      case 'select_lieutenant':
+        this.selectedLieutenant = action.selected_option.value;
+        break;
+
+      case 'select_navigator':
+        this.selectedNavigator = action.selected_option.value;
+        break;
+
+      case 'confirm_navigation_team':
+        if (userId !== this.game.captain) {
+          await client.chat.postEphemeral({
+            channel: this.channelId,
+            user: userId,
+            text: 'Only the Captain can confirm the navigation team!'
+          });
+          return;
+        }
+
+        if (!this.selectedLieutenant || !this.selectedNavigator) {
+          await client.chat.postEphemeral({
+            channel: this.channelId,
+            user: userId,
+            text: 'Please select both Lieutenant and Navigator first!'
+          });
+          return;
+        }
+
+        this.game.setNavigationTeam(this.selectedLieutenant, this.selectedNavigator);
+
+        await client.chat.postMessage({
+          channel: this.channelId,
+          text: `Navigation team selected!\nLieutenant: <@${this.selectedLieutenant}>\nNavigator: <@${this.selectedNavigator}>`
+        });
+
+        // Move to mutiny phase
+        this.game.currentPhase = 'MUTINY';
+        await this.executePhase();
+        break;
+
+      case 'cast_mutiny_vote':
+        await this.openMutinyVoteModal(userId, client);
+        break;
+
+      case 'end_turn':
+        // Check win condition
+        const winCondition = this.game.checkWinCondition();
+        if (winCondition.winner) {
+          await client.chat.postMessage({
+            channel: this.channelId,
+            text: `*Game Over!*\n\n${winCondition.reason}\n\n*${winCondition.winner}* wins! 🎉`
+          });
+        } else {
+          await this.startTurn();
+        }
+        break;
+
+      default:
+        // Handle navigation card selections
+        if (action.action_id.startsWith('navigate_')) {
+          const movement = JSON.parse(action.value);
+          this.game.moveShip(movement.dx, movement.dy);
+
+          await client.chat.postMessage({
+            channel: this.channelId,
+            text: `<@${userId}> played a navigation card! New position: (${this.game.shipPosition.x}, ${this.game.shipPosition.y})`
+          });
+
+          // After both players navigate, move to voting
+          // In a real implementation, track both navigations
+          this.game.currentPhase = 'VOTING';
+          await this.executePhase();
+        }
+        break;
+    }
+  }
+
+  async openMutinyVoteModal(userId, client) {
+    const player = this.game.getPlayer(userId);
+
+    if (!player || !player.isAlive) {
+      return;
+    }
+
+    if (userId === this.game.captain) {
+      await client.chat.postEphemeral({
+        channel: this.channelId,
+        user: userId,
+        text: 'The Captain cannot vote in a mutiny!'
+      });
+      return;
+    }
+
+    try {
+      await client.views.open({
+        trigger_id: body.trigger_id,
+        view: {
+          type: 'modal',
+          callback_id: 'mutiny_vote_modal',
+          private_metadata: this.channelId,
+          title: {
+            type: 'plain_text',
+            text: 'Mutiny Vote'
+          },
+          submit: {
+            type: 'plain_text',
+            text: 'Submit'
+          },
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `You have *${player.guns}* guns available.\n\nHow many guns do you want to use for the mutiny?`
+              }
+            },
+            {
+              type: 'input',
+              block_id: 'guns_input',
+              element: {
+                type: 'number_input',
+                action_id: 'guns_count',
+                is_decimal_allowed: false,
+                min_value: '0',
+                max_value: String(player.guns)
+              },
+              label: {
+                type: 'plain_text',
+                text: 'Number of Guns'
+              }
+            }
+          ]
+        }
+      });
+    } catch (error) {
+      console.error('Error opening mutiny modal:', error);
+    }
+  }
+
+  async handleViewSubmission(view, body, client) {
+    if (view.callback_id === 'mutiny_vote_modal') {
+      const userId = body.user.id;
+      const gunsCount = parseInt(view.state.values.guns_input.guns_count.value);
+
+      this.mutinyVotes.set(userId, gunsCount);
+
+      await client.chat.postEphemeral({
+        channel: this.channelId,
+        user: userId,
+        text: `Your mutiny vote has been recorded: ${gunsCount} guns`
+      });
+    }
+  }
+}

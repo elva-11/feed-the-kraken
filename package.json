@@ -1,0 +1,23 @@
+{
+  "name": "feed-the-kraken-slack",
+  "version": "1.0.0",
+  "description": "Slack Socket Mode application for Feed the Kraken board game",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "slack",
+    "socket-mode",
+    "game",
+    "feed-the-kraken"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@slack/bolt": "^3.21.1",
+    "dotenv": "^16.4.5"
+  }
+}
