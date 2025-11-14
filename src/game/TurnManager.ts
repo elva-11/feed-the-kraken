@@ -1,18 +1,41 @@
+import { GameState } from './GameState.js';
+import type { WebClient } from '@slack/web-api';
+import type { SlackActionMiddlewareArgs, SlackViewMiddlewareArgs, AllMiddlewareArgs } from '@slack/bolt';
+
+interface NavigationDirection {
+  name: string;
+  dx: number;
+  dy: number;
+}
+
+interface NavigationMovement {
+  dx: number;
+  dy: number;
+}
+
 export class TurnManager {
-  constructor(gameState, client, channelId) {
+  game: GameState;
+  client: WebClient;
+  channelId: string;
+  mutinyVotes: Map<string, number>;
+  navigationCards: unknown[];
+  selectedLieutenant?: string;
+  selectedNavigator?: string;
+
+  constructor(gameState: GameState, client: WebClient, channelId: string) {
     this.game = gameState;
     this.client = client;
     this.channelId = channelId;
-    this.mutinyVotes = new Map(); // userId -> number of guns
+    this.mutinyVotes = new Map();
     this.navigationCards = [];
   }
 
-  async startTurn() {
+  async startTurn(): Promise<void> {
     this.game.nextPhase();
     await this.executePhase();
   }
 
-  async executePhase() {
+  async executePhase(): Promise<void> {
     switch (this.game.currentPhase) {
       case 'NAVIGATION_SELECTION':
         await this.navigationSelectionPhase();
@@ -29,16 +52,15 @@ export class TurnManager {
     }
   }
 
-  async navigationSelectionPhase() {
-    const captain = this.game.getPlayer(this.game.captain);
+  async navigationSelectionPhase(): Promise<void> {
+    const captain = this.game.getPlayer(this.game.captain!);
 
-    // Create interactive message for captain to select navigation team
     const alivePlayers = this.game.getAlivePlayers()
       .filter(p => p.userId !== this.game.captain);
 
     const playerOptions = alivePlayers.map(p => ({
       text: {
-        type: 'plain_text',
+        type: 'plain_text' as const,
         text: p.username || `Player ${p.userId}`
       },
       value: p.userId
@@ -109,7 +131,7 @@ export class TurnManager {
     });
   }
 
-  async mutinyPhase() {
+  async mutinyPhase(): Promise<void> {
     this.mutinyVotes.clear();
 
     const alivePlayers = this.game.getAlivePlayers()
@@ -143,12 +165,9 @@ export class TurnManager {
         }
       ]
     });
-
-    // In a real implementation, you'd set a timer here and wait for votes
-    // For now, we'll rely on manual progression or set a timeout
   }
 
-  async navigationPhase() {
+  async navigationPhase(): Promise<void> {
     await this.client.chat.postMessage({
       channel: this.channelId,
       text: `*Navigation Phase*\n\nThe navigation team (<@${this.game.lieutenant}> and <@${this.game.navigator}>) is steering the ship!`,
@@ -163,15 +182,12 @@ export class TurnManager {
       ]
     });
 
-    // Send navigation cards to Lieutenant and Navigator
-    await this.sendNavigationCards(this.game.lieutenant);
-    await this.sendNavigationCards(this.game.navigator);
+    await this.sendNavigationCards(this.game.lieutenant!);
+    await this.sendNavigationCards(this.game.navigator!);
   }
 
-  async sendNavigationCards(userId) {
-    // In a real implementation, you'd have a deck of navigation cards
-    // For now, simplified version
-    const directions = [
+  async sendNavigationCards(userId: string): Promise<void> {
+    const directions: NavigationDirection[] = [
       { name: 'North ⬆️', dx: 0, dy: 1 },
       { name: 'South ⬇️', dx: 0, dy: -1 },
       { name: 'East ➡️', dx: 1, dy: 0 },
@@ -181,9 +197,9 @@ export class TurnManager {
     ];
 
     const buttons = directions.map(dir => ({
-      type: 'button',
+      type: 'button' as const,
       text: {
-        type: 'plain_text',
+        type: 'plain_text' as const,
         text: dir.name
       },
       action_id: `navigate_${dir.dx}_${dir.dy}`,
@@ -213,7 +229,7 @@ export class TurnManager {
     }
   }
 
-  async votingPhase() {
+  async votingPhase(): Promise<void> {
     await this.client.chat.postMessage({
       channel: this.channelId,
       text: `*Voting Phase*\n\nTime to discuss and vote!`,
@@ -244,7 +260,7 @@ export class TurnManager {
     });
   }
 
-  async handleAction(action, body, client) {
+  async handleAction(action: any, body: any, client: WebClient): Promise<void> {
     const userId = body.user.id;
 
     switch (action.action_id) {
@@ -282,17 +298,15 @@ export class TurnManager {
           text: `Navigation team selected!\nLieutenant: <@${this.selectedLieutenant}>\nNavigator: <@${this.selectedNavigator}>`
         });
 
-        // Move to mutiny phase
         this.game.currentPhase = 'MUTINY';
         await this.executePhase();
         break;
 
       case 'cast_mutiny_vote':
-        await this.openMutinyVoteModal(userId, client);
+        await this.openMutinyVoteModal(userId, client, body);
         break;
 
       case 'end_turn':
-        // Check win condition
         const winCondition = this.game.checkWinCondition();
         if (winCondition.winner) {
           await client.chat.postMessage({
@@ -305,9 +319,8 @@ export class TurnManager {
         break;
 
       default:
-        // Handle navigation card selections
         if (action.action_id.startsWith('navigate_')) {
-          const movement = JSON.parse(action.value);
+          const movement: NavigationMovement = JSON.parse(action.value);
           this.game.moveShip(movement.dx, movement.dy);
 
           await client.chat.postMessage({
@@ -315,8 +328,6 @@ export class TurnManager {
             text: `<@${userId}> played a navigation card! New position: (${this.game.shipPosition.x}, ${this.game.shipPosition.y})`
           });
 
-          // After both players navigate, move to voting
-          // In a real implementation, track both navigations
           this.game.currentPhase = 'VOTING';
           await this.executePhase();
         }
@@ -324,7 +335,7 @@ export class TurnManager {
     }
   }
 
-  async openMutinyVoteModal(userId, client) {
+  async openMutinyVoteModal(userId: string, client: WebClient, body: any): Promise<void> {
     const player = this.game.getPlayer(userId);
 
     if (!player || !player.isAlive) {
@@ -386,7 +397,7 @@ export class TurnManager {
     }
   }
 
-  async handleViewSubmission(view, body, client) {
+  async handleViewSubmission(view: any, body: any, client: WebClient): Promise<void> {
     if (view.callback_id === 'mutiny_vote_modal') {
       const userId = body.user.id;
       const gunsCount = parseInt(view.state.values.guns_input.guns_count.value);

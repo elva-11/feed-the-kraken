@@ -9,7 +9,7 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
-  port: process.env.PORT || 3000
+  port: parseInt(process.env.PORT || '3000', 10)
 });
 
 const gameManager = new GameManager(app);
@@ -26,7 +26,8 @@ app.command('/kraken-start', async ({ command, ack, say, client }) => {
 
   } catch (error) {
     console.error('Error starting game:', error);
-    await say(`Error starting game: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await say(`Error starting game: ${errorMessage}`);
   }
 });
 
@@ -43,7 +44,8 @@ app.command('/kraken-join', async ({ command, ack, say }) => {
 
   } catch (error) {
     console.error('Error joining game:', error);
-    await say(`Error joining game: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await say(`Error joining game: ${errorMessage}`);
   }
 });
 
@@ -59,7 +61,8 @@ app.command('/kraken-begin', async ({ command, ack, say, client }) => {
 
   } catch (error) {
     console.error('Error beginning game:', error);
-    await say(`Error beginning game: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await say(`Error beginning game: ${errorMessage}`);
   }
 });
 
@@ -74,7 +77,8 @@ app.command('/kraken-status', async ({ command, ack, say }) => {
 
   } catch (error) {
     console.error('Error getting status:', error);
-    await say(`Error getting game status: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await say(`Error getting game status: ${errorMessage}`);
   }
 });
 

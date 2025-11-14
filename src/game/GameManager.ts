@@ -1,14 +1,40 @@
 import { GameState } from './GameState.js';
 import { TurnManager } from './TurnManager.js';
+import type { App } from '@slack/bolt';
+import type { WebClient } from '@slack/web-api';
+
+interface Player {
+  userId: string;
+  username: string;
+  role: string | null;
+  isAlive: boolean;
+  guns: number;
+  characterCard: string | null;
+  characterUsed: boolean;
+}
+
+interface CreateGameResult {
+  success: boolean;
+  message: string;
+}
+
+interface BeginGameResult {
+  success: boolean;
+  message: string;
+}
 
 export class GameManager {
-  constructor(app) {
+  app: App;
+  games: Map<string, GameState>;
+  turnManagers: Map<string, TurnManager>;
+
+  constructor(app: App) {
     this.app = app;
-    this.games = new Map(); // channelId -> GameState
-    this.turnManagers = new Map(); // channelId -> TurnManager
+    this.games = new Map();
+    this.turnManagers = new Map();
   }
 
-  createGame(channelId, hostId, client) {
+  async createGame(channelId: string, hostId: string, client: WebClient): Promise<CreateGameResult> {
     if (this.games.has(channelId)) {
       throw new Error('A game is already in progress in this channel!');
     }
@@ -17,10 +43,14 @@ export class GameManager {
     this.games.set(channelId, game);
 
     // Add host as first player
-    const user = client.users.info({ user: hostId }).then(result => {
-      const username = result.user.name;
+    try {
+      const result = await client.users.info({ user: hostId });
+      const username = result.user?.name || 'Unknown';
       game.addPlayer(hostId, username);
-    });
+    } catch (error) {
+      console.error(`Failed to fetch user info for ${hostId}:`, error);
+      game.addPlayer(hostId, 'Player');
+    }
 
     return {
       success: true,
@@ -28,7 +58,7 @@ export class GameManager {
     };
   }
 
-  async joinGame(channelId, userId) {
+  async joinGame(channelId: string, userId: string): Promise<{ success: boolean; message: string }> {
     const game = this.games.get(channelId);
 
     if (!game) {
@@ -38,7 +68,7 @@ export class GameManager {
     return game.addPlayer(userId, 'Player');
   }
 
-  async beginGame(channelId, hostId, client) {
+  async beginGame(channelId: string, hostId: string, client: WebClient): Promise<BeginGameResult> {
     const game = this.games.get(channelId);
 
     if (!game) {
@@ -72,7 +102,7 @@ export class GameManager {
     };
   }
 
-  async sendRoleAssignments(game, client) {
+  async sendRoleAssignments(game: GameState, client: WebClient): Promise<void> {
     const players = game.getAllPlayers();
 
     for (const player of players) {
@@ -107,7 +137,7 @@ export class GameManager {
     }
   }
 
-  getRoleMessage(player, game) {
+  getRoleMessage(player: Player, game: GameState): string {
     const baseMessage = `*Feed the Kraken* 🦑\n\nYour role: *${player.role}*\n\n`;
 
     switch (player.role) {
@@ -136,7 +166,7 @@ export class GameManager {
     }
   }
 
-  async getGameStatus(channelId) {
+  async getGameStatus(channelId: string): Promise<string> {
     const game = this.games.get(channelId);
 
     if (!game) {
@@ -146,7 +176,7 @@ export class GameManager {
     return game.getStatusMessage();
   }
 
-  async handleAction(action, body, client) {
+  async handleAction(action: any, body: any, client: WebClient): Promise<void> {
     const channelId = body.channel?.id || body.view?.private_metadata;
     const userId = body.user.id;
 
@@ -158,7 +188,7 @@ export class GameManager {
     await turnManager.handleAction(action, body, client);
   }
 
-  async handleViewSubmission(view, body, client) {
+  async handleViewSubmission(view: any, body: any, client: WebClient): Promise<void> {
     const channelId = view.private_metadata;
     const userId = body.user.id;
 
@@ -170,11 +200,11 @@ export class GameManager {
     await turnManager.handleViewSubmission(view, body, client);
   }
 
-  getGame(channelId) {
+  getGame(channelId: string): GameState | undefined {
     return this.games.get(channelId);
   }
 
-  endGame(channelId) {
+  endGame(channelId: string): void {
     this.games.delete(channelId);
     this.turnManagers.delete(channelId);
   }
