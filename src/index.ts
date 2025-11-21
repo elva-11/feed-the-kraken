@@ -22,7 +22,7 @@ app.command('/kraken-start', async ({ command, ack, say, client }) => {
     const channelId = command.channel_id;
     const userId = command.user_id;
 
-    const result = await gameManager.createGame(channelId, userId, client);
+    await gameManager.createGame(channelId, userId, client);
     // Notify channel that the user has started and joined the game
     await say(`<@${userId}> has started a new game and joined! Use \`/kraken-join\` to join the game. Need at least 5 players to start.`);
 

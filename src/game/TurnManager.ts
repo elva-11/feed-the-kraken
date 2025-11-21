@@ -1,6 +1,5 @@
 import { GameState } from './GameState.js';
 import type { WebClient } from '@slack/web-api';
-import type { SlackActionMiddlewareArgs, SlackViewMiddlewareArgs, AllMiddlewareArgs } from '@slack/bolt';
 
 interface NavigationDirection {
   name: string;
@@ -25,6 +24,9 @@ export class TurnManager {
   mutinyTimeoutId?: NodeJS.Timeout;
   captainNavigationChoice?: NavigationMovement;
   lieutenantNavigationChoice?: NavigationMovement;
+  captainChoiceLocked: boolean;
+  lieutenantChoiceLocked: boolean;
+  navigatorChoiceLocked: boolean;
   lastMutinySucceeded: boolean;
 
   constructor(gameState: GameState, client: WebClient, channelId: string) {
@@ -34,11 +36,22 @@ export class TurnManager {
     this.mutinyVotes = new Map();
     this.navigationCards = [];
     this.mutinyEligibleVoters = new Set();
+    this.captainChoiceLocked = false;
+    this.lieutenantChoiceLocked = false;
+    this.navigatorChoiceLocked = false;
     this.lastMutinySucceeded = false;
   }
 
   async startTurn(): Promise<void> {
+    const wasVotingPhase = this.game.currentPhase === 'VOTING';
+
     this.game.nextPhase();
+
+    // If we just finished a turn and lieutenant/navigator are already set, skip to MUTINY
+    if (wasVotingPhase && this.game.lieutenant && this.game.navigator && this.game.currentPhase === 'NAVIGATION_SELECTION') {
+      this.game.currentPhase = 'MUTINY';
+    }
+
     await this.executePhase();
   }
 
@@ -60,8 +73,6 @@ export class TurnManager {
   }
 
   async navigationSelectionPhase(): Promise<void> {
-    const captain = this.game.getPlayer(this.game.captain!);
-
     const alivePlayers = this.game.getAlivePlayers()
       .filter(p => p.userId !== this.game.captain);
 
@@ -274,9 +285,12 @@ export class TurnManager {
   }
 
   async navigationPhase(): Promise<void> {
-    // Reset navigation choices
+    // Reset navigation choices and locks
     this.captainNavigationChoice = undefined;
     this.lieutenantNavigationChoice = undefined;
+    this.captainChoiceLocked = false;
+    this.lieutenantChoiceLocked = false;
+    this.navigatorChoiceLocked = false;
 
     await this.client.chat.postMessage({
       channel: this.channelId,
@@ -297,14 +311,17 @@ export class TurnManager {
   }
 
   async sendNavigationChoiceCards(userId: string, role: 'captain' | 'lieutenant'): Promise<void> {
-    const directions: NavigationDirection[] = [
+    // Only use cardinal directions (N, S, E, W)
+    const allDirections: NavigationDirection[] = [
       { name: 'North ⬆️', dx: 0, dy: 1 },
       { name: 'South ⬇️', dx: 0, dy: -1 },
       { name: 'East ➡️', dx: 1, dy: 0 },
-      { name: 'West ⬅️', dx: -1, dy: 0 },
-      { name: 'Northeast ↗️', dx: 1, dy: 1 },
-      { name: 'Southeast ↘️', dx: 1, dy: -1 }
+      { name: 'West ⬅️', dx: -1, dy: 0 }
     ];
+
+    // Randomly select 2 directions
+    const shuffled = [...allDirections].sort(() => Math.random() - 0.5);
+    const directions = shuffled.slice(0, 2);
 
     const buttons = directions.map(dir => ({
       type: 'button' as const,
@@ -513,6 +530,15 @@ export class TurnManager {
       default:
         // Handle captain/lieutenant navigation choices
         if (action.action_id.startsWith('nav_choice_captain_')) {
+          if (this.captainChoiceLocked) {
+            await client.chat.postEphemeral({
+              channel: userId,
+              user: userId,
+              text: 'You have already made your choice and cannot change it!'
+            });
+            return;
+          }
+
           if (userId !== this.game.captain) {
             await client.chat.postEphemeral({
               channel: this.channelId,
@@ -524,6 +550,7 @@ export class TurnManager {
 
           const payload = JSON.parse(action.value);
           this.captainNavigationChoice = { dx: payload.dx, dy: payload.dy };
+          this.captainChoiceLocked = true;
 
           await client.chat.postEphemeral({
             channel: userId,
@@ -536,6 +563,15 @@ export class TurnManager {
             await this.sendNavigatorFinalChoice();
           }
         } else if (action.action_id.startsWith('nav_choice_lieutenant_')) {
+          if (this.lieutenantChoiceLocked) {
+            await client.chat.postEphemeral({
+              channel: userId,
+              user: userId,
+              text: 'You have already made your choice and cannot change it!'
+            });
+            return;
+          }
+
           if (userId !== this.game.lieutenant) {
             await client.chat.postEphemeral({
               channel: this.channelId,
@@ -547,6 +583,7 @@ export class TurnManager {
 
           const payload = JSON.parse(action.value);
           this.lieutenantNavigationChoice = { dx: payload.dx, dy: payload.dy };
+          this.lieutenantChoiceLocked = true;
 
           await client.chat.postEphemeral({
             channel: userId,
@@ -560,6 +597,15 @@ export class TurnManager {
           }
         } else if (action.action_id.startsWith('navigate_final_')) {
           // Navigator's final choice
+          if (this.navigatorChoiceLocked) {
+            await client.chat.postEphemeral({
+              channel: userId,
+              user: userId,
+              text: 'You have already made your choice and cannot change it!'
+            });
+            return;
+          }
+
           if (userId !== this.game.navigator) {
             await client.chat.postEphemeral({
               channel: this.channelId,
@@ -571,6 +617,7 @@ export class TurnManager {
 
           const payload = JSON.parse(action.value);
           const movement: NavigationMovement = { dx: payload.dx, dy: payload.dy };
+          this.navigatorChoiceLocked = true;
           this.game.moveShip(movement.dx, movement.dy);
 
           await client.chat.postMessage({
