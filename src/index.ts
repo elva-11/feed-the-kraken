@@ -22,7 +22,9 @@ app.command('/kraken-start', async ({ command, ack, say, client }) => {
     const channelId = command.channel_id;
     const userId = command.user_id;
 
-    await gameManager.createGame(channelId, userId, client);
+    const result = await gameManager.createGame(channelId, userId, client);
+    // Notify channel that the user has started and joined the game
+    await say(`<@${userId}> has started a new game and joined! Use \`/kraken-join\` to join the game. Need at least 5 players to start.`);
 
   } catch (error) {
     console.error('Error starting game:', error);
@@ -32,15 +34,26 @@ app.command('/kraken-start', async ({ command, ack, say, client }) => {
 });
 
 // Command: Join the game
-app.command('/kraken-join', async ({ command, ack, say }) => {
+app.command('/kraken-join', async ({ command, ack, say, client }) => {
   await ack();
 
   try {
     const channelId = command.channel_id;
     const userId = command.user_id;
 
-    const result = await gameManager.joinGame(channelId, userId);
-    await say(result.message);
+    const result = await gameManager.joinGame(channelId, userId, client);
+
+    // If the user is already in the game or other errors, send ephemeral message
+    if (!result.success) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: result.message
+      });
+    } else {
+      // Success: send public message
+      await say(result.message);
+    }
 
   } catch (error) {
     console.error('Error joining game:', error);

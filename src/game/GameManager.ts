@@ -58,14 +58,22 @@ export class GameManager {
     };
   }
 
-  async joinGame(channelId: string, userId: string): Promise<{ success: boolean; message: string }> {
+  async joinGame(channelId: string, userId: string, client: WebClient): Promise<{ success: boolean; message: string }> {
     const game = this.games.get(channelId);
 
     if (!game) {
       throw new Error('No game found in this channel. Use `/kraken-start` to create one!');
     }
 
-    return game.addPlayer(userId, 'Player');
+    // Fetch the user's name from Slack
+    try {
+      const result = await client.users.info({ user: userId });
+      const username = result.user?.name || 'Player';
+      return game.addPlayer(userId, username);
+    } catch (error) {
+      console.error(`Failed to fetch user info for ${userId}:`, error);
+      return game.addPlayer(userId, 'Player');
+    }
   }
 
   async beginGame(channelId: string, hostId: string, client: WebClient): Promise<BeginGameResult> {

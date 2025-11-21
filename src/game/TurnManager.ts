@@ -25,6 +25,7 @@ export class TurnManager {
   mutinyTimeoutId?: NodeJS.Timeout;
   captainNavigationChoice?: NavigationMovement;
   lieutenantNavigationChoice?: NavigationMovement;
+  lastMutinySucceeded: boolean;
 
   constructor(gameState: GameState, client: WebClient, channelId: string) {
     this.game = gameState;
@@ -33,6 +34,7 @@ export class TurnManager {
     this.mutinyVotes = new Map();
     this.navigationCards = [];
     this.mutinyEligibleVoters = new Set();
+    this.lastMutinySucceeded = false;
   }
 
   async startTurn(): Promise<void> {
@@ -71,15 +73,23 @@ export class TurnManager {
       value: p.userId
     }));
 
+    // Post public announcement
     await this.client.chat.postMessage({
       channel: this.channelId,
-      text: `*Turn ${this.game.currentTurn} - Navigation Selection*\n\n<@${this.game.captain}> is the Captain!`,
+      text: `*Turn ${this.game.currentTurn} - Navigation Selection*\n\n<@${this.game.captain}> is the Captain and must select a Lieutenant and Navigator!`
+    });
+
+    // Send role selection interface only to the captain (ephemeral)
+    await this.client.chat.postEphemeral({
+      channel: this.channelId,
+      user: this.game.captain!,
+      text: `Select Lieutenant and Navigator (only visible to you)`,
       blocks: [
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*Turn ${this.game.currentTurn} - Navigation Selection*\n\n<@${this.game.captain}> is the Captain and must select a Lieutenant and Navigator!`
+            text: `*Select your navigation team* (only visible to you)`
           }
         },
         {
@@ -236,12 +246,23 @@ export class TurnManager {
       resultMessage += `🏴‍☠️ *MUTINY SUCCEEDS!*\n\n`;
       resultMessage += `<@${previousCaptain}> has been overthrown!\n`;
 
-      // Replace the captain with a random crew member
-      this.game.rotateCaptain();
+      // Elect new captain based on who has the most guns (randomize if tie)
+      this.game.electCaptainByGuns();
 
-      resultMessage += `The new Captain is <@${this.game.captain}>!`;
+      resultMessage += `The new Captain is <@${this.game.captain}>! (Elected based on gun count)\n\n`;
+      resultMessage += `The new Captain must now select a Lieutenant and Navigator!`;
+
+      // Track that mutiny succeeded so we can trigger another mutiny after role selection
+      this.lastMutinySucceeded = true;
+
+      // Go back to NAVIGATION_SELECTION phase for new captain to choose roles
+      this.game.currentPhase = 'NAVIGATION_SELECTION';
     } else {
       resultMessage += `✅ *Mutiny fails.*\n\n<@${previousCaptain}> remains Captain.`;
+
+      // Move to next phase normally
+      this.game.currentPhase = 'NAVIGATION';
+      this.lastMutinySucceeded = false;
     }
 
     await this.client.chat.postMessage({
@@ -249,8 +270,6 @@ export class TurnManager {
       text: resultMessage
     });
 
-    // Move to next phase
-    this.game.currentPhase = 'NAVIGATION';
     await this.executePhase();
   }
 
@@ -330,12 +349,14 @@ export class TurnManager {
       {
         movement: this.captainNavigationChoice,
         name: this.getDirectionName(this.captainNavigationChoice),
-        from: 'Captain'
+        from: 'Captain',
+        role: 'captain'
       },
       {
         movement: this.lieutenantNavigationChoice,
         name: this.getDirectionName(this.lieutenantNavigationChoice),
-        from: 'Lieutenant'
+        from: 'Lieutenant',
+        role: 'lieutenant'
       }
     ];
 
@@ -345,7 +366,7 @@ export class TurnManager {
         type: 'plain_text' as const,
         text: `${choice.name} (from ${choice.from})`
       },
-      action_id: `navigate_final_${choice.movement.dx}_${choice.movement.dy}`,
+      action_id: `navigate_final_${choice.role}_${choice.movement.dx}_${choice.movement.dy}`,
       value: JSON.stringify({ dx: choice.movement.dx, dy: choice.movement.dy, channelId: this.channelId })
     }));
 
@@ -452,6 +473,16 @@ export class TurnManager {
           return;
         }
 
+        // Validate that Lieutenant and Navigator are not the same person
+        if (this.selectedLieutenant === this.selectedNavigator) {
+          await client.chat.postEphemeral({
+            channel: this.channelId,
+            user: userId,
+            text: 'Lieutenant and Navigator must be different people! Please make different selections.'
+          });
+          return;
+        }
+
         this.game.setNavigationTeam(this.selectedLieutenant, this.selectedNavigator);
 
         await client.chat.postMessage({
@@ -459,7 +490,15 @@ export class TurnManager {
           text: `Navigation team selected!\nLieutenant: <@${this.selectedLieutenant}>\nNavigator: <@${this.selectedNavigator}>`
         });
 
+        // If the last mutiny succeeded, trigger another mutiny phase
+        // Otherwise, proceed normally to mutiny phase
         this.game.currentPhase = 'MUTINY';
+
+        // Reset the flag after using it
+        if (this.lastMutinySucceeded) {
+          this.lastMutinySucceeded = false;
+        }
+
         await this.executePhase();
         break;
 

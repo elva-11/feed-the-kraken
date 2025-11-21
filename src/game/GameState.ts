@@ -195,6 +195,25 @@ export class GameState {
     this.captain = alivePlayers[nextIndex].userId;
   }
 
+  electCaptainByGuns(): void {
+    const alivePlayers = this.getAlivePlayers();
+    if (alivePlayers.length === 0) return;
+
+    // Find the maximum number of guns
+    const maxGuns = Math.max(...alivePlayers.map(p => p.guns));
+
+    // Find all players with the maximum number of guns
+    const playersWithMaxGuns = alivePlayers.filter(p => p.guns === maxGuns);
+
+    // If there's a tie, randomly select one
+    if (playersWithMaxGuns.length > 1) {
+      const randomIndex = Math.floor(Math.random() * playersWithMaxGuns.length);
+      this.captain = playersWithMaxGuns[randomIndex].userId;
+    } else {
+      this.captain = playersWithMaxGuns[0].userId;
+    }
+  }
+
   setNavigationTeam(lieutenantId: string, navigatorId: string): void {
     this.lieutenant = lieutenantId;
     this.navigator = navigatorId;
@@ -301,7 +320,7 @@ export class GameState {
     if (currentIndex === -1 || currentIndex === phaseOrder.length - 1) {
       this.currentTurn++;
       this.currentPhase = 'NAVIGATION_SELECTION';
-      this.rotateCaptain();
+      // Don't rotate captain - captain stays the same across turns
     } else {
       this.currentPhase = phaseOrder[currentIndex + 1];
     }
